@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>เกมรับของตกจากฟ้า (Tilt Edition)</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            background-color: #1a1a2e;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: #fff;
+        }
+
+        #game-container {
+            position: relative;
+            width: 400px;
+            height: 600px;
+            background: linear-gradient(to bottom, #0f2027, #203a43, #2c5364);
+            border: 4px solid #00fff5;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0, 255, 245, 0.4);
+            cursor: none; /* ซ่อนเคอร์เซอร์เมาส์ในพื้นที่เกม */
+        }
+
+        /* ตะกร้ารับของ - เพิ่มการเอียงหมุน transition */
+        #basket {
+            position: absolute;
+            bottom: 20px;
+            left: 160px;
+            width: 80px;
+            height: 25px;
+            background-color: #ff007f;
+            border-radius: 8px;
+            box-shadow: 0 0 10px #ff007f;
+            /* ปรับแต่งจุดหมุนให้อยู่ตรงกลาง และให้เอียง/เคลื่อนที่อย่างนุ่มนวล */
+            transform-origin: center center;
+            transition: transform 0.1s ease-out;
+        }
+
+        /* ของที่ตกมา */
+        .item {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            top: 0;
+        }
+
+        .item.good {
+            background-color: #00ff88;
+            box-shadow: 0 0 10px #00ff88;
+        }
+
+        .item.bad {
+            background-color: #ff3300;
+            box-shadow: 0 0 10px #ff3300;
+            border-radius: 4px;
+        }
+
+        /* หน้าจอคะแนน และ Game Over */
+        #ui-layer {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            right: 15px;
+            display: flex;
+            justify-content: space-between;
+            font-size: 18px;
+            font-weight: bold;
+            z-index: 10;
+        }
+
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 20;
+            cursor: default;
+        }
+
+        #game-over-screen.hidden {
+            display: none;
+        }
+
+        #game-over-screen h1 {
+            color: #ff3300;
+            margin-bottom: 10px;
+        }
+
+        button {
+            margin-top: 20px;
+            padding: 10px 25px;
+            font-size: 16px;
+            font-weight: bold;
+            background-color: #00fff5;
+            color: #000;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            box-shadow: 0 0 10px #00fff5;
+            transition: 0.2s;
+        }
+
+        button:hover {
+            transform: scale(1.05);
+            background-color: #fff;
+        }
+
+        .controls-hint {
+            position: absolute;
+            bottom: 5px;
+            width: 100%;
+            text-align: center;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.5);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="game-container">
+        <!-- UI แสดงคะแนนและพลังชีวิต -->
+        <div id="ui-layer">
+            <div>คะแนน: <span id="score">0</span></div>
+            <div>พลังชีวิต: <span id="lives">3</span></div>
+        </div>
+
+        <!-- ตัวละครตะกร้ารับของ -->
+        <div id="basket"></div>
+
+        <!-- หน้าจอตอนจบเกม -->
+        <div id="game-over-screen" class="hidden">
+            <h1>GAME OVER</h1>
+            <p>คะแนนที่คุณทำได้: <span id="final-score">0</span></p>
+            <button onclick="startGame()">เล่นอีกครั้ง</button>
+        </div>
+
+        <div class="controls-hint">ใช้ลูกศร ซ้าย-ขวา หรือ เลื่อนเมาส์ เพื่อขยับ</div>
+    </div>
+
+    <script>
+        const container = document.getElementById('game-container');
+        const basket = document.getElementById('basket');
+        const scoreDisplay = document.getElementById('score');
+        const livesDisplay = document.getElementById('lives');
+        const gameOverScreen = document.getElementById('game-over-screen');
+        const finalScoreDisplay = document.getElementById('final-score');
+
+        // สถานะเกม
+        let score = 0;
+        let lives = 3;
+        let basketX = 160;
+        let currentAngle = 0; // มุมเอียงปัจจุบัน (องศา)
+        let isGameOver = false;
+        let gameInterval;
+        let spawnInterval;
+        let speedMultiplier = 1;
+
+        // ตัวแปรสำหรับคำนวณทิศทางการเคลื่อนที่ของเมาส์
+        let lastMouseX = 0;
+        let resetTiltTimeout = null;
+
+        // ฟังก์ชันสำหรับอัปเดตตำแหน่งและการเอียงของตะกร้า
+        function updateBasketTransform(tiltAngle) {
+            currentAngle = tiltAngle;
+            // ใช้ transform เพื่อเปลี่ยนตำแหน่ง X และใส่การหมุน rotate
+            basket.style.transform = `translateX(${basketX}px) rotate(${currentAngle}deg)`;
+        }
+
+        // การควบคุมด้วยแป้นพิมพ์
+        document.addEventListener('keydown', (e) => {
+            if (isGameOver) return;
+            const step = 25;
+            const maxTilt = 20; // มุมเอียงสูงสุดเมื่อกดปุ่ม (องศา)
+
+            if (e.key === 'ArrowLeft') {
+                basketX = Math.max(0, basketX - step);
+                updateBasketTransform(-maxTilt); // เอียงซ้าย
+            } else if (e.key === 'ArrowRight') {
+                basketX = Math.min(container.clientWidth - basket.clientWidth, basketX + step);
+                updateBasketTransform(maxTilt); // เอียงขวา
+            }
+
+            // คืนค่ามุมกลับมาตรงเมื่อปล่อยปุ่ม/หยุดกด
+            clearTimeout(resetTiltTimeout);
+            resetTiltTimeout = setTimeout(() => {
+                updateBasketTransform(0);
+            }, 150);
+        });
+
+        // การควบคุมด้วยเมาส์ (คำนวณความเร็วและทิศทางเพื่อความเอียงที่สมจริง)
+        container.addEventListener('mousemove', (e) => {
+            if (isGameOver) return;
+            const rect = container.getBoundingClientRect();
+            let mouseX = e.clientX - rect.left - (basket.clientWidth / 2);
+            
+            // จำกัดขอบเขตไม่ให้หลุดจอ
+            if (mouseX < 0) mouseX = 0;
+            if (mouseX > container.clientWidth - basket.clientWidth) {
+                mouseX = container.clientWidth - basket.clientWidth;
+            }
+
+            // คำนวณความเร็วและทิศทางการเลื่อนเมาส์ (deltaX)
+            const deltaX = e.clientX - lastMouseX;
+            lastMouseX = e.clientX;
+
+            // คำนวณมุมเอียงตามความเร็วการลากเมาส์ (จำกัดไม่เกิน -25 ถึง 25 องศา)
+            let tilt = deltaX * 1.5;
+            tilt = Math.max(-25, Math.min(25, tilt));
+
+            basketX = mouseX;
+            updateBasketTransform(tilt);
+
+            // คืนค่ามุมกลับเป็น 0 เมื่อเมาส์หยุดนิ่ง
+            clearTimeout(resetTiltTimeout);
+            resetTiltTimeout = setTimeout(() => {
+                updateBasketTransform(0);
+            }, 100);
+        });
+
+        // เริ่มต้นเกมใหม่
+        function startGame() {
+            document.querySelectorAll('.item').forEach(item => item.remove());
+            
+            score = 0;
+            lives = 3;
+            speedMultiplier = 1;
+            isGameOver = false;
+            basketX = (container.clientWidth / 2) - (basket.clientWidth / 2);
+            
+            scoreDisplay.textContent = score;
+            livesDisplay.textContent = lives;
+            gameOverScreen.classList.add('hidden');
+
+            updateBasketTransform(0);
+
+            clearInterval(gameInterval);
+            clearInterval(spawnInterval);
+
+            spawnInterval = setInterval(spawnItem, 800);
+            gameInterval = setInterval(updateGame, 20);
+        }
+
+        // สุ่มสร้างของตกจากฟ้า
+        function spawnItem() {
+            if (isGameOver) return;
+
+            const item = document.createElement('div');
+            item.classList.add('item');
+
+            const isGood = Math.random() > 0.2;
+            item.classList.add(isGood ? 'good' : 'bad');
+
+            const randomX = Math.floor(Math.random() * (container.clientWidth - 30));
+            item.style.left = randomX + 'px';
+            item.style.top = '0px';
+
+            container.appendChild(item);
+        }
+
+        // อัปเดตตำแหน่งและการชน
+        function updateGame() {
+            if (isGameOver) return;
+
+            const items = document.querySelectorAll('.item');
+            items.forEach(item => {
+                let top = parseFloat(item.style.top) || 0;
+                let fallSpeed = (item.classList.contains('good') ? 4 : 5) * speedMultiplier;
+                
+                top += fallSpeed;
+                item.style.top = top + 'px';
+
+                // ตรวจสอบการชนกับตะกร้า
+                const itemRect = item.getBoundingClientRect();
+                const basketRect = basket.getBoundingClientRect();
+
+                const isColliding = !(
+                    itemRect.bottom < basketRect.top ||
+                    itemRect.top > basketRect.bottom ||
+                    itemRect.right < basketRect.left ||
+                    itemRect.left > basketRect.right
+                );
+
+                if (isColliding) {
+                    if (item.classList.contains('good')) {
+                        score += 10;
+                        scoreDisplay.textContent = score;
+                        if (score % 50 === 0) speedMultiplier += 0.15;
+                    } else {
+                        lives -= 1;
+                        livesDisplay.textContent = lives;
+                        if (lives <= 0) endGame();
+                    }
+                    item.remove();
+                }
+
+                // ถ้าของตกเลยขอบล่าง
+                if (top > container.clientHeight) {
+                    if (item.classList.contains('good')) {
+                        lives -= 1;
+                        livesDisplay.textContent = lives;
+                        if (lives <= 0) endGame();
+                    }
+                    item.remove();
+                }
+            });
+        }
+
+        // จบเกม
+        function endGame() {
+            isGameOver = true;
+            clearInterval(gameInterval);
+            clearInterval(spawnInterval);
+            finalScoreDisplay.textContent = score;
+            gameOverScreen.classList.remove('hidden');
+        }
+
+        // เริ่มเกม
+        startGame();
+    </script>
+</body>
+</html>
